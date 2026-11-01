@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="cs" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firemní Telefonní Seznam (Univerzální CSV PWA)</title>
+    
+    <!-- PWA Primary Meta Tags -->
+    <meta name="theme-color" content="#0f172a">
+    <meta name="description" content="Offline firemní seznam s odolným CSV parserem a 3D Zemí">
+    <link rel="manifest" href="manifest.json" id="manifest-placeholder">
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        darkbg: '#0b0f19',
+                        cardbg: 'rgba(30, 41, 59, 0.75)',
+                        accent: '#3b82f6',
+                        accentglow: '#60a5fa'
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Three.js (3D Globe) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <style>
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        .glass {
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #globe-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 0; pointer-events: none;
+        }
+    </style>
+</head>
+<body class="bg-darkbg text-slate-200 font-sans min-h-screen flex flex-col relative overflow-x-hidden">
+
+    <!-- 3D Globe Background -->
+    <div id="globe-container"></div>
+
+    <!-- Header & Navigation -->
+    <header class="relative z-10 glass sticky top-0 shadow-lg border-b border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 py-3 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-full bg-blue-600/30 flex items-center justify-center border border-blue-500/50 shadow-inner">
+                    <i class="fa-solid fa-earth-americas text-blue-400 text-xl animate-pulse"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-wide bg-gradient-to-r from-blue-400 to-indigo-300 bg-clip-text text-transparent">
+                        Firemní Seznam
+                    </h1>
+                    <p class="text-xs text-slate-400 flex items-center gap-1.5">
+                        <span id="status-indicator" class="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                        <span id="status-text">PWA Připraveno (Offline)</span>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Header Action Controls -->
+            <div class="flex items-center space-x-2">
+                <button onclick="document.getElementById('csv-file-input').click()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold transition duration-150 flex items-center gap-2 shadow-lg shadow-blue-600/30">
+                    <i class="fa-solid fa-file-csv"></i>
+                    <span>Nahrát CSV Soubor</span>
+                </button>
+                <input type="file" id="csv-file-input" accept=".csv,.txt" class="hidden" onchange="handleFileUpload(event)">
+
+                <button onclick="openPwaModal()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-xl text-sm font-medium transition flex items-center gap-2" title="Instalace PWA">
+                    <i class="fa-solid fa-download text-indigo-400"></i>
+                    <span class="hidden sm:inline">PWA Soubory</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="relative z-10 flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
+
+        <!-- Error & Diagnostic Alert Box -->
+        <div id="error-box" class="hidden glass border-l-4 border-rose-500 rounded-2xl p-5 shadow-2xl space-y-3">
+            <div class="flex items-start justify-between">
+                <div class="flex items-center gap-3">
+                    <i class="fa-solid fa-triangle-exclamation text-rose-400 text-2xl"></i>
+                    <div>
+                        <h3 class="text-base font-bold text-rose-300">Chyba při zpracování souboru</h3>
+                        <p id="error-message-text" class="text-xs text-slate-300 mt-0.5">Detail chyby...</p>
+                    </div>
+                </div>
+                <button onclick="closeErrorBox()" class="text-slate-400 hover:text-slate-200">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+            <!-- Raw Preview Box -->
+            <div id="raw-preview-container" class="hidden bg-slate-950 p-3 rounded-xl border border-slate-800">
+                <div class="text-xs font-semibold text-slate-400 mb-1 flex justify-between">
+                    <span>Náhled prvních 5 řádků souboru (Diagnostika):</span>
+                    <span id="detected-encoding-tag" class="text-amber-400 font-mono">--</span>
+                </div>
+                <pre id="raw-preview-text" class="font-mono text-xs text-slate-300 overflow-x-auto whitespace-pre-wrap max-h-40 leading-relaxed"></pre>
+            </div>
+        </div>
+
+        <!-- Controls & Search Section -->
+        <div class="glass rounded-2xl p-4 sm:p-6 shadow-2xl border border-slate-800/80">
+            <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 mb-3">
+                <!-- Search Input -->
+                <div class="sm:col-span-7 relative">
+                    <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                    </div>
+                    <input type="text" id="search-input" oninput="debounceSearch()" placeholder="Hledat jméno, telefon, email, město..." 
+                           class="w-full pl-10 pr-10 py-2.5 bg-slate-900/90 border border-slate-700/80 rounded-xl text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm transition">
+                    <button id="clear-search-btn" onclick="clearSearch()" class="hidden absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-200">
+                        <i class="fa-solid fa-circle-xmark"></i>
+                    </button>
+                </div>
+
+                <!-- Column Select Filter -->
+                <div class="sm:col-span-3">
+                    <select id="filter-column" onchange="renderContacts()" class="w-full py-2.5 px-3 bg-slate-900/90 border border-slate-700/80 rounded-xl text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="ALL">Všechny sloupce</option>
+                        <option value="Jmeno">Jméno</option>
+                        <option value="Prijmeni">Příjmení</option>
+                        <option value="Email">Email</option>
+                        <option value="Telefon">Telefon</option>
+                        <option value="Mesto">Město</option>
+                        <option value="Zamestnani">Zaměstnání</option>
+                        <option value="Cislo zakaznika">Číslo zákazníka</option>
+                    </select>
+                </div>
+
+                <div class="sm:col-span-2 flex items-center justify-end">
+                    <span id="record-count" class="bg-slate-800/90 px-3 py-2 rounded-xl border border-slate-700/60 w-full text-center text-xs font-semibold text-blue-400">0 kontaktů</span>
+                </div>
+            </div>
+
+            <!-- Database status info -->
+            <div class="text-xs text-slate-400 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80 pt-3">
+                <span id="db-status"><i class="fa-solid fa-database mr-1"></i> Načítání databáze...</span>
+                <button onclick="clearDatabase()" class="text-rose-400 hover:text-rose-300 transition flex items-center gap-1 font-medium">
+                    <i class="fa-solid fa-trash-can"></i> Vymazat databázi
+                </button>
+            </div>
+        </div>
+
+        <!-- Contacts Table / List -->
+        <div class="glass rounded-2xl shadow-2xl border border-slate-800/80 overflow-hidden flex flex-col">
+            <div class="overflow-x-auto flex-grow">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="bg-slate-900/90 text-xs uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                        <tr>
+                            <th scope="col" class="py-3.5 px-4 font-semibold">Jméno a Příjmení</th>
+                            <th scope="col" class="py-3.5 px-4 font-semibold">Zaměstnání</th>
+                            <th scope="col" class="py-3.5 px-4 font-semibold hidden md:table-cell">Město</th>
+                            <th scope="col" class="py-3.5 px-4 font-semibold">Kontakt</th>
+                            <th scope="col" class="py-3.5 px-4 font-semibold text-right">Detail</th>
+                        </tr>
+                    </thead>
+                    <tbody id="contacts-table-body" class="divide-y divide-slate-800/60">
+                        <!-- Content rendered dynamically -->
+                    </tbody>
+                </table>
+
+                <!-- Empty State -->
+                <div id="empty-state" class="py-16 text-center px-4">
+                    <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-slate-800/80 flex items-center justify-center border border-slate-700 text-slate-500 text-2xl">
+                        <i class="fa-solid fa-address-book"></i>
+                    </div>
+                    <h3 class="text-base font-semibold text-slate-200">Žádné kontakty v databázi</h3>
+                    <p class="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        Nahrajte CSV soubor tlačítkem vpravo nahoře. Podporovány jsou všechny typy CSV (středník, čárka, UTF-8, Win-1250).
+                    </p>
+                </div>
+            </div>
+
+            <!-- Pagination Bar -->
+            <div class="bg-slate-900/80 px-4 py-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-4">
+                <div class="text-xs text-slate-400">
+                    Zobrazeno <span id="page-start" class="font-semibold text-slate-200">0</span> - 
+                    <span id="page-end" class="font-semibold text-slate-200">0</span> z 
+                    <span id="total-count" class="font-semibold text-slate-200">0</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button id="prev-page-btn" onclick="changePage(-1)" disabled class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition border border-slate-700">
+                        <i class="fa-solid fa-chevron-left mr-1"></i> Předchozí
+                    </button>
+                    <span id="page-indicator" class="text-xs text-slate-400 px-2 font-mono">Strana 1</span>
+                    <button id="next-page-btn" onclick="changePage(1)" disabled class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition border border-slate-700">
+                        Další <i class="fa-solid fa-chevron-right ml-1"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Detail Contact Modal -->
+    <div id="contact-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm hidden opacity-0 transition-opacity duration-200">
+        <div class="glass max-w-lg w-full rounded-2xl border border-slate-700 shadow-2xl overflow-hidden transform scale-95 transition-transform duration-200" id="modal-card">
+            
+            <div class="bg-gradient-to-r from-blue-950/80 to-indigo-950/80 p-6 border-b border-slate-700 relative">
+                <button onclick="closeModal()" class="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-800/80 text-slate-400 hover:text-slate-100 flex items-center justify-center border border-slate-700 transition">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+                <div class="flex items-center space-x-4">
+                    <div id="modal-avatar" class="w-16 h-16 rounded-2xl bg-blue-600/30 border border-blue-400/40 flex items-center justify-center text-blue-300 text-2xl font-bold uppercase shadow-inner">
+                        --
+                    </div>
+                    <div>
+                        <h2 id="modal-fullname" class="text-xl font-bold text-slate-100">--</h2>
+                        <p id="modal-job" class="text-sm text-blue-400 font-medium">--</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-6 space-y-4 max-h-[60vh] overflow-y-auto text-sm">
+                <!-- Action Buttons -->
+                <div class="grid grid-cols-2 gap-3 mb-4">
+                    <a id="modal-call-btn" href="#" class="flex items-center justify-center gap-2 bg-emerald-600/90 hover:bg-emerald-500 text-white font-medium py-2.5 px-4 rounded-xl transition shadow-lg shadow-emerald-600/20">
+                        <i class="fa-solid fa-phone"></i> Zavolat
+                    </a>
+                    <a id="modal-email-btn" href="#" class="flex items-center justify-center gap-2 bg-blue-600/90 hover:bg-blue-500 text-white font-medium py-2.5 px-4 rounded-xl transition shadow-lg shadow-blue-600/20">
+                        <i class="fa-solid fa-envelope"></i> Napsat email
+                    </a>
+                </div>
+
+                <div class="space-y-2.5 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+                    <div class="flex justify-between border-b border-slate-800 pb-2">
+                        <span class="text-slate-400">Telefon:</span>
+                        <span id="modal-phone" class="font-mono text-slate-200">--</span>
+                    </div>
+                    <div class="flex justify-between border-b border-slate-800 pb-2">
+                        <span class="text-slate-400">Email:</span>
+                        <span id="modal-email" class="text-slate-200 font-mono">--</span>
+                    </div>
+                    <div class="flex justify-between border-b border-slate-800 pb-2">
+                        <span class="text-slate-400">Číslo zákazníka:</span>
+                        <span id="modal-customer-id" class="text-slate-200 font-mono">--</span>
+                    </div>
+                    <div class="flex justify-between border-b border-slate-800 pb-2">
+                        <span class="text-slate-400">Pohlaví:</span>
+                        <span id="modal-gender" class="text-slate-200">--</span>
+                    </div>
+                    <div class="flex justify-between border-b border-slate-800 pb-2">
+                        <span class="text-slate-400">Bydliště & Město:</span>
+                        <span id="modal-address" class="text-slate-200">--</span>
+                    </div>
+                    <div class="flex justify-between border-b border-slate-800 pb-2">
+                        <span class="text-slate-400">Rodinný stav:</span>
+                        <span id="modal-family-status" class="text-slate-200">--</span>
+                    </div>
+                    <div>
+                        <span class="text-slate-400 block mb-1">Další informace:</span>
+                        <p id="modal-info" class="text-slate-300 text-xs bg-slate-950 p-3 rounded-lg border border-slate-800 whitespace-pre-wrap">--</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bg-slate-900/90 px-6 py-3 text-right border-t border-slate-800">
+                <button onclick="closeModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-medium transition border border-slate-700">
+                    Zavřít
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PWA Installation Files Modal -->
+    <div id="pwa-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm hidden opacity-0 transition-opacity duration-200">
+        <div class="glass max-w-2xl w-full rounded-2xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div class="bg-slate-900/90 p-5 border-b border-slate-800 flex justify-between items-center">
+                <h2 class="text-lg font-bold text-slate-100 flex items-center gap-2">
+                    <i class="fa-solid fa-mobile-screen-button text-blue-400"></i> PWA Offline Soubory pro HTTPS Server
+                </h2>
+                <button onclick="closePwaModal()" class="text-slate-400 hover:text-slate-200">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+            
+            <div class="p-6 overflow-y-auto space-y-4 text-xs sm:text-sm">
+                <p class="text-slate-300 leading-relaxed">
+                    Uložte tento soubor jako <code class="bg-slate-800 px-1.5 py-0.5 rounded text-blue-300 font-mono">index.html</code>. Pro plnou podporu fungování bez internetu uložte do stejného adresáře na HTTPS serveru i tyto 2 soubory:
+                </p>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button onclick="downloadManifest()" class="p-3 bg-slate-800 hover:bg-slate-750 border border-slate-700 rounded-xl flex items-center gap-3 transition">
+                        <i class="fa-solid fa-file-code text-amber-400 text-2xl"></i>
+                        <div class="text-left">
+                            <div class="font-bold text-slate-200">manifest.json</div>
+                            <div class="text-xs text-slate-400">Klikněte pro stažení</div>
+                        </div>
+                    </button>
+                    <button onclick="downloadServiceWorker()" class="p-3 bg-slate-800 hover:bg-slate-750 border border-slate-700 rounded-xl flex items-center gap-3 transition">
+                        <i class="fa-solid fa-gear text-emerald-400 text-2xl"></i>
+                        <div class="text-left">
+                            <div class="font-bold text-slate-200">sw.js</div>
+                            <div class="text-xs text-slate-400">Klikněte pro stažení</div>
+                        </div>
+                    </button>
+                </div>
+
+                <div>
+                    <h4 class="font-semibold text-slate-300 mb-1">Náhled manifest.json:</h4>
+                    <pre class="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-slate-400 text-xs overflow-x-auto max-h-28" id="manifest-code"></pre>
+                </div>
+
+                <div>
+                    <h4 class="font-semibold text-slate-300 mb-1">Náhled sw.js:</h4>
+                    <pre class="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-slate-400 text-xs overflow-x-auto max-h-28" id="sw-code"></pre>
+                </div>
+            </div>
+
+            <div class="bg-slate-900/90 px-6 py-3 border-t border-slate-800 text-right">
+                <button onclick="closePwaModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-medium transition">
+                    Rozumím
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress Modal -->
+    <div id="progress-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md hidden opacity-0 transition-opacity duration-200">
+        <div class="glass max-w-md w-full rounded-2xl border border-slate-700 shadow-2xl p-6 text-center">
+            <div class="w-14 h-14 mx-auto mb-4 rounded-full bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 text-2xl">
+                <i class="fa-solid fa-spinner animate-spin"></i>
+            </div>
+            <h3 id="progress-title" class="text-lg font-bold text-slate-100">Zpracovávám CSV soubor</h3>
+            <p id="progress-subtitle" class="text-xs text-slate-400 mt-1 mb-4">Prosím strpení, načítám a parsuji data...</p>
+            
+            <div class="w-full bg-slate-900 rounded-full h-3.5 mb-2 overflow-hidden p-0.5 border border-slate-700">
+                <div id="progress-bar-fill" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-full rounded-full transition-all duration-150 w-0"></div>
+            </div>
+            
+            <div class="flex justify-between text-xs text-slate-400 font-mono">
+                <span id="progress-status-text">Zpracováno: 0%</span>
+                <span id="progress-counter">0 / 0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 glass px-4 py-3 rounded-xl border border-slate-700 shadow-2xl flex items-center gap-3 text-sm">
+        <i id="toast-icon" class="fa-solid fa-circle-info text-blue-400"></i>
+        <span id="toast-message">Zpráva</span>
+    </div>
+
+    <script>
+        /* ==========================================================================
+           1. APPLICATION STATE & INDEXEDDB
+           ========================================================================== */
+        const DB_NAME = 'FiremniSeznamUniversalDB';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'contacts';
+        let db = null;
+
+        let allContacts = [];
+        let filteredContacts = [];
+        let currentPage = 1;
+        const PAGE_SIZE = 50;
+        let searchDebounceTimeout = null;
+
+        window.onload = async function() {
+            initThreeGlobe();
+            setupPwaFiles();
+
+            try {
+                await initDB();
+                allContacts = await getAllContactsFromDB();
+                filteredContacts = [...allContacts];
+                renderContacts();
+                
+                document.getElementById('db-status').textContent = allContacts.length > 0 
+                    ? `V offline DB uloženo: ${allContacts.length} kontaktů`
+                    : 'Databáze je prázdná';
+            } catch (err) {
+                console.error("IndexedDB Error:", err);
+                showError("Selhalo otvírání offline databáze IndexedDB. Pokud jste v Anonymním režimu prohlížeče, otevřete aplikaci v běžném okně.");
+            }
+        };
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = (e) => {
+                    const dbInstance = e.target.result;
+                    if (!dbInstance.objectStoreNames.contains(STORE_NAME)) {
+                        dbInstance.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+                    }
+                };
+                request.onsuccess = (e) => {
+                    db = e.target.result;
+                    resolve(db);
+                };
+                request.onerror = (e) => reject(e);
+            });
+        }
+
+        async function saveContactsToDBBatched(contacts, onProgress) {
+            const BATCH_SIZE = 1500;
+            const total = contacts.length;
+            
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                store.clear();
+                tx.oncomplete = () => resolve();
+                tx.onerror = (e) => reject(e);
+            });
+
+            for (let i = 0; i < total; i += BATCH_SIZE) {
+                const batch = contacts.slice(i, i + BATCH_SIZE);
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(STORE_NAME, 'readwrite');
+                    const store = tx.objectStore(STORE_NAME);
+                    batch.forEach(item => store.add(item));
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = (e) => reject(e);
+                });
+
+                if (onProgress) {
+                    const currentCount = Math.min(i + BATCH_SIZE, total);
+                    onProgress(currentCount, total);
+                }
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+
+        async function getAllContactsFromDB() {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readonly');
+                const store = tx.objectStore(STORE_NAME);
+                const request = store.getAll();
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = (e) => reject(e);
+            });
+        }
+
+        async function clearDatabase() {
+            if (!confirm('Opravdu chcete vymazat všechny uložené kontakty?')) return;
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            store.clear();
+            tx.oncomplete = () => {
+                allContacts = [];
+                filteredContacts = [];
+                currentPage = 1;
+                renderContacts();
+                showToast('Databáze byla vymazána', 'info');
+                document.getElementById('db-status').textContent = 'Databáze je prázdná';
+            };
+        }
+
+
+        /* ==========================================================================
+           2. UNIVERSAL RESILIENT CSV PARSER
+           ========================================================================== */
+        
+        // Formats scientific numbers like 4.20601E+11 to standard phone numbers
+        function formatScientificNumber(val) {
+            if (typeof val !== 'string') return val;
+            const trimmed = val.trim();
+            if (/^[+-]?\d+(\.\d+)?[eE][+-]?\d+$/.test(trimmed)) {
+                try {
+                    const num = Number(trimmed);
+                    if (!isNaN(num)) {
+                        return num.toLocaleString('fullwide', { useGrouping: false });
+                    }
+                } catch (e) {}
+            }
+            return trimmed;
+        }
+
+        // Detect Encoding (UTF-8, Windows-1250, etc.)
+        async function detectEncodingAndReadText(file) {
+            const buffer = await file.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+
+            // Try UTF-8 first
+            try {
+                const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+                const text = utf8Decoder.decode(bytes);
+                return { text, encoding: 'UTF-8' };
+            } catch (e) {
+                // If UTF-8 fails (invalid byte sequence), fall back to Windows-1250 (Czech Excel default)
+                try {
+                    const winDecoder = new TextDecoder('windows-1250');
+                    const text = winDecoder.decode(bytes);
+                    return { text, encoding: 'Windows-1250' };
+                } catch (err) {
+                    const latinDecoder = new TextDecoder('iso-8859-2');
+                    return { text: latinDecoder.decode(bytes), encoding: 'ISO-8859-2' };
+                }
+            }
+        }
+
+        // Detect delimiter: semicolon ;, comma ,, tab \t, pipe |
+        function detectDelimiter(text) {
+            const firstLines = text.split(/\r\n|\n/).slice(0, 10).join('\n');
+            const semicolons = (firstLines.match(/;/g) || []).length;
+            const commas = (firstLines.match(/,/g) || []).length;
+            const tabs = (firstLines.match(/\t/g) || []).length;
+            const pipes = (firstLines.match(/\|/g) || []).length;
+
+            let max = Math.max(semicolons, commas, tabs, pipes);
+            if (max === 0) return ',';
+            if (max === semicolons) return ';';
+            if (max === tabs) return '\t';
+            if (max === pipes) return '|';
+            return ',';
+        }
+
+        // Robust CSV Parser line splitting
+        function parseCSVToRows(text, delimiter) {
+            const rows = [];
+            let currentRow = [];
+            let currentToken = '';
+            let inQuotes = false;
+
+            // Remove UTF-8 BOM if present
+            if (text.charCodeAt(0) === 0xFEFF) {
+                text = text.slice(1);
+            }
+
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                const nextChar = text[i + 1];
+
+                if (char === '"') {
+                    if (inQuotes && nextChar === '"') {
+                        currentToken += '"';
+                        i++;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === delimiter && !inQuotes) {
+                    currentRow.push(currentToken);
+                    currentToken = '';
+                } else if ((char === '\r' || char === '\n') && !inQuotes) {
+                    if (char === '\r' && nextChar === '\n') i++;
+                    currentRow.push(currentToken);
+                    if (currentRow.some(c => c.trim().length > 0)) {
+                        rows.push(currentRow);
+                    }
+                    currentRow = [];
+                    currentToken = '';
+                } else {
+                    currentToken += char;
+                }
+            }
+
+            if (currentToken || currentRow.length > 0) {
+                currentRow.push(currentToken);
+                if (currentRow.some(c => c.trim().length > 0)) {
+                    rows.push(currentRow);
+                }
+            }
+
+            return rows;
+        }
+
+        // Fallback parser if quoting or CSV is heavily malformed
+        function parseLineByLineFallback(text, delimiter) {
+            const lines = text.split(/\r\n|\n/);
+            const rows = [];
+            for (let line of lines) {
+                if (!line.trim()) continue;
+                const parts = line.split(delimiter).map(p => p.replace(/^"|"$/g, '').trim());
+                rows.push(parts);
+            }
+            return rows;
+        }
+
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            closeErrorBox();
+            showProgressModal('Načítání CSV souboru', 'Detekuji kódování a rozvržení...');
+
+            try {
+                // Step 1: Detect Encoding and Read Text
+                updateProgress(10, 'Detekce kódování (UTF-8 / Win-1250)...');
+                const { text, encoding } = await detectEncodingAndReadText(file);
+                
+                // Show preview in diagnostic box
+                const sampleLines = text.split(/\r\n|\n/).slice(0, 5).join('\n');
+                document.getElementById('raw-preview-text').textContent = sampleLines;
+                document.getElementById('detected-encoding-tag').textContent = `Kódování: ${encoding}`;
+
+                // Step 2: Detect Delimiter
+                updateProgress(25, 'Analýza oddělovače...');
+                const delimiter = detectDelimiter(text);
+
+                // Step 3: Parse CSV Rows
+                updateProgress(40, 'Parsuji buňky a sloupce...');
+                let rows = parseCSVToRows(text, delimiter);
+
+                if (rows.length === 0) {
+                    // Try fallback
+                    rows = parseLineByLineFallback(text, delimiter);
+                }
+
+                if (rows.length === 0) {
+                    hideProgressModal();
+                    showError("Soubor neobsahuje žádná čitelná data.", sampleLines);
+                    return;
+                }
+
+                // Check if 1st row is header
+                const firstRowStr = rows[0].join(' ').toLowerCase();
+                let startIndex = 0;
+                if (firstRowStr.includes('email') || firstRowStr.includes('jmeno') || firstRowStr.includes('prijmeni') || firstRowStr.includes('telefon')) {
+                    startIndex = 1; // Skip header row
+                }
+
+                // Step 4: Map columns by index to contact schema
+                updateProgress(60, 'Převedení na kontakty...');
+                const parsedContacts = [];
+                const totalRows = rows.length;
+
+                for (let i = startIndex; i < totalRows; i++) {
+                    const r = rows[i];
+                    if (!r || r.length === 0) continue;
+
+                    // Column Mapping based on index order (0 to 10+)
+                    const contact = {
+                        Email: r[0] !== undefined ? r[0].trim() : '',
+                        Telefon: r[1] !== undefined ? formatScientificNumber(r[1]) : '',
+                        'Cislo zakaznika': r[2] !== undefined ? formatScientificNumber(r[2]) : '',
+                        Jmeno: r[3] !== undefined ? r[3].trim() : '',
+                        Prijmeni: r[4] !== undefined ? r[4].trim() : '',
+                        Pohlavi: r[5] !== undefined ? r[5].trim() : '',
+                        Bydliste: r[6] !== undefined ? r[6].trim() : '',
+                        Mesto: r[7] !== undefined ? r[7].trim() : '',
+                        Rodinny_stav: r[8] !== undefined ? r[8].trim() : '',
+                        Zamestnani: r[9] !== undefined ? r[9].trim() : '',
+                        'Další informace': r.slice(10).join(' ').trim()
+                    };
+
+                    parsedContacts.push(contact);
+
+                    if (i % 5000 === 0) {
+                        const pct = 60 + ((i / totalRows) * 20);
+                        updateProgress(pct, `${i} / ${totalRows}`);
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+
+                if (parsedContacts.length === 0) {
+                    hideProgressModal();
+                    showError("Nepodařilo se vytvořit žádné kontakty z nahraného souboru.", sampleLines);
+                    return;
+                }
+
+                // Step 5: Save to IndexedDB
+                updateProgress(80, 'Ukládání do offline databáze...');
+                await saveContactsToDBBatched(parsedContacts, (current, total) => {
+                    const pct = 80 + ((current / total) * 20);
+                    updateProgress(pct, `${current} / ${total}`);
+                });
+
+                allContacts = parsedContacts;
+                filteredContacts = [...allContacts];
+                currentPage = 1;
+                renderContacts();
+
+                document.getElementById('db-status').textContent = `Uloženo v offline DB: ${allContacts.length} kontaktů`;
+                hideProgressModal();
+                showToast(`Nahráno ${allContacts.length} kontaktů!`, 'success');
+
+            } catch (err) {
+                console.error("CSV Processing Error:", err);
+                hideProgressModal();
+                showError(`Chyba při zpracování CSV: ${err.message || err}`);
+            } finally {
+                event.target.value = '';
+            }
+        }
+
+
+        /* ==========================================================================
+           3. UI HELPERS & DIAGNOSTIC BOX
+           ========================================================================== */
+        function showError(msg, sampleText = null) {
+            const box = document.getElementById('error-box');
+            document.getElementById('error-message-text').textContent = msg;
+            
+            const rawContainer = document.getElementById('raw-preview-container');
+            if (sampleText) {
+                document.getElementById('raw-preview-text').textContent = sampleText;
+                rawContainer.classList.remove('hidden');
+            } else {
+                rawContainer.classList.add('hidden');
+            }
+            
+            box.classList.remove('hidden');
+        }
+
+        function closeErrorBox() {
+            document.getElementById('error-box').classList.add('hidden');
+        }
+
+        function showProgressModal(title, subtitle) {
+            const modal = document.getElementById('progress-modal');
+            document.getElementById('progress-title').textContent = title;
+            document.getElementById('progress-subtitle').textContent = subtitle;
+            document.getElementById('progress-bar-fill').style.width = '0%';
+            document.getElementById('progress-status-text').textContent = 'Zpracováno: 0%';
+            document.getElementById('progress-counter').textContent = '0%';
+
+            modal.classList.remove('hidden');
+            setTimeout(() => modal.classList.remove('opacity-0'), 10);
+        }
+
+        function updateProgress(percent, counterText) {
+            const clamped = Math.min(Math.max(percent, 0), 100).toFixed(0);
+            document.getElementById('progress-bar-fill').style.width = clamped + '%';
+            document.getElementById('progress-status-text').textContent = `Zpracováno: ${clamped}%`;
+            if (counterText) {
+                document.getElementById('progress-counter').textContent = counterText;
+            }
+        }
+
+        function hideProgressModal() {
+            const modal = document.getElementById('progress-modal');
+            modal.classList.add('opacity-0');
+            setTimeout(() => modal.classList.add('hidden'), 200);
+        }
+
+
+        /* ==========================================================================
+           4. SEARCH & RENDERING
+           ========================================================================== */
+        function debounceSearch() {
+            clearTimeout(searchDebounceTimeout);
+            searchDebounceTimeout = setTimeout(() => {
+                applyFilter();
+            }, 200);
+        }
+
+        function clearSearch() {
+            document.getElementById('search-input').value = '';
+            document.getElementById('clear-search-btn').classList.add('hidden');
+            applyFilter();
+        }
+
+        function applyFilter() {
+            const query = document.getElementById('search-input').value.toLowerCase().trim();
+            const col = document.getElementById('filter-column').value;
+
+            document.getElementById('clear-search-btn').classList.toggle('hidden', query === '');
+
+            if (!query) {
+                filteredContacts = [...allContacts];
+            } else {
+                filteredContacts = allContacts.filter(contact => {
+                    if (col === 'ALL') {
+                        return Object.values(contact).some(val => 
+                            String(val).toLowerCase().includes(query)
+                        );
+                    } else {
+                        return String(contact[col] || '').toLowerCase().includes(query);
+                    }
+                });
+            }
+
+            currentPage = 1;
+            renderContacts();
+        }
+
+        function renderContacts() {
+            const tbody = document.getElementById('contacts-table-body');
+            const emptyState = document.getElementById('empty-state');
+            const recordCount = document.getElementById('record-count');
+
+            recordCount.textContent = `${filteredContacts.length} kontaktů`;
+            tbody.innerHTML = '';
+
+            if (filteredContacts.length === 0) {
+                emptyState.classList.remove('hidden');
+                updatePaginationControls(0);
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+
+            const total = filteredContacts.length;
+            const startIdx = (currentPage - 1) * PAGE_SIZE;
+            const endIdx = Math.min(startIdx + PAGE_SIZE, total);
+            const pageData = filteredContacts.slice(startIdx, endIdx);
+
+            pageData.forEach((contact, idx) => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-800/50 transition cursor-pointer group';
+                tr.onclick = () => openModal(startIdx + idx);
+
+                const fullName = `${contact.Jmeno || ''} ${contact.Prijmeni || ''}`.trim() || 'Bez jména';
+                const avatarChar = (contact.Jmeno ? contact.Jmeno[0] : (contact.Prijmeni ? contact.Prijmeni[0] : 'U')).toUpperCase();
+
+                tr.innerHTML = `
+                    <td class="py-3 px-4 flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition">
+                            ${avatarChar}
+                        </div>
+                        <div>
+                            <div class="font-semibold text-slate-100 group-hover:text-blue-300 transition">${fullName}</div>
+                            <div class="text-xs text-slate-400 md:hidden">${contact.Zamestnani || 'Nespecifikováno'}</div>
+                        </div>
+                    </td>
+                    <td class="py-3 px-4 font-medium text-slate-300">
+                        ${contact.Zamestnani || '<span class="text-slate-500 font-normal">Nespecifikováno</span>'}
+                    </td>
+                    <td class="py-3 px-4 text-slate-400 hidden md:table-cell">
+                        ${contact.Mesto || '-'}
+                    </td>
+                    <td class="py-3 px-4">
+                        <div class="flex flex-col text-xs">
+                            <span class="text-slate-200 font-mono">${contact.Telefon || '-'}</span>
+                            <span class="text-slate-400">${contact.Email || '-'}</span>
+                        </div>
+                    </td>
+                    <td class="py-3 px-4 text-right">
+                        <button onclick="event.stopPropagation(); openModal(${startIdx + idx})" class="p-2 rounded-lg bg-slate-800 hover:bg-blue-600 hover:text-white text-slate-300 transition">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            updatePaginationControls(total);
+        }
+
+        function updatePaginationControls(total) {
+            const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
+            const startIdx = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+            const endIdx = Math.min(currentPage * PAGE_SIZE, total);
+
+            document.getElementById('page-start').textContent = startIdx;
+            document.getElementById('page-end').textContent = endIdx;
+            document.getElementById('total-count').textContent = total;
+            document.getElementById('page-indicator').textContent = `Strana ${currentPage} z ${totalPages}`;
+
+            document.getElementById('prev-page-btn').disabled = currentPage <= 1;
+            document.getElementById('next-page-btn').disabled = currentPage >= totalPages;
+        }
+
+        function changePage(delta) {
+            currentPage += delta;
+            renderContacts();
+        }
+
+
+        /* ==========================================================================
+           5. CONTACT DETAIL MODAL
+           ========================================================================== */
+        function openModal(index) {
+            const contact = filteredContacts[index];
+            if (!contact) return;
+
+            const fullName = `${contact.Jmeno || ''} ${contact.Prijmeni || ''}`.trim() || 'Bez jména';
+            
+            document.getElementById('modal-fullname').textContent = fullName;
+            document.getElementById('modal-job').textContent = contact.Zamestnani || 'Nespecifikováno';
+            document.getElementById('modal-phone').textContent = contact.Telefon || '-';
+            document.getElementById('modal-email').textContent = contact.Email || '-';
+            document.getElementById('modal-customer-id').textContent = contact['Cislo zakaznika'] || '-';
+            document.getElementById('modal-gender').textContent = contact.Pohlavi || '-';
+            document.getElementById('modal-address').textContent = `${contact.Bydliste || ''} ${contact.Mesto ? '(' + contact.Mesto + ')' : ''}`.trim() || '-';
+            document.getElementById('modal-family-status').textContent = contact.Rodinny_stav || '-';
+            document.getElementById('modal-info').textContent = contact['Další informace'] || 'Žádné doplňující informace.';
+            document.getElementById('modal-avatar').textContent = (contact.Jmeno ? contact.Jmeno[0] : (contact.Prijmeni ? contact.Prijmeni[0] : 'U')).toUpperCase();
+
+            const callBtn = document.getElementById('modal-call-btn');
+            const emailBtn = document.getElementById('modal-email-btn');
+
+            if (contact.Telefon) {
+                callBtn.href = `tel:${contact.Telefon.replace(/\s+/g, '')}`;
+                callBtn.classList.remove('opacity-50', 'pointer-events-none');
+            } else {
+                callBtn.href = '#';
+                callBtn.classList.add('opacity-50', 'pointer-events-none');
+            }
+
+            if (contact.Email) {
+                emailBtn.href = `mailto:${contact.Email}`;
+                emailBtn.classList.remove('opacity-50', 'pointer-events-none');
+            } else {
+                emailBtn.href = '#';
+                emailBtn.classList.add('opacity-50', 'pointer-events-none');
+            }
+
+            const modal = document.getElementById('contact-modal');
+            const card = document.getElementById('modal-card');
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                card.classList.remove('scale-95');
+            }, 10);
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('contact-modal');
+            const card = document.getElementById('modal-card');
+            modal.classList.add('opacity-0');
+            card.classList.add('scale-95');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+            }, 200);
+        }
+
+
+        /* ==========================================================================
+           6. THREE.JS ANIMATED 3D GLOBE BACKGROUND
+           ========================================================================== */
+        function initThreeGlobe() {
+            const container = document.getElementById('globe-container');
+            const scene = new THREE.Scene();
+
+            const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 250;
+
+            const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(renderer.domElement);
+
+            const globeGroup = new THREE.Group();
+
+            const sphereGeo = new THREE.SphereGeometry(60, 36, 36);
+            const sphereMat = new THREE.MeshBasicMaterial({
+                color: 0x1e3a8a,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.25
+            });
+            const globeMesh = new THREE.Mesh(sphereGeo, sphereMat);
+            globeGroup.add(globeMesh);
+
+            const particlesGeo = new THREE.BufferGeometry();
+            const particleCount = 700;
+            const posArray = new Float32Array(particleCount * 3);
+
+            for (let i = 0; i < particleCount * 3; i += 3) {
+                const u = Math.random();
+                const v = Math.random();
+                const theta = u * 2.0 * Math.PI;
+                const phi = Math.acos(2.0 * v - 1.0);
+                const r = 62 + Math.random() * 2;
+
+                posArray[i] = r * Math.sin(phi) * Math.cos(theta);
+                posArray[i + 1] = r * Math.sin(phi) * Math.sin(theta);
+                posArray[i + 2] = r * Math.cos(phi);
+            }
+
+            particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            const particlesMat = new THREE.PointsMaterial({
+                size: 1.2,
+                color: 0x60a5fa,
+                transparent: true,
+                opacity: 0.8
+            });
+            const particleSystem = new THREE.Points(particlesGeo, particlesMat);
+            globeGroup.add(particleSystem);
+
+            const ringGeo = new THREE.RingGeometry(75, 77, 64);
+            const ringMat = new THREE.MeshBasicMaterial({
+                color: 0x3b82f6,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.15
+            });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 2.5;
+            globeGroup.add(ring);
+
+            globeGroup.rotation.z = 0.3;
+            globeGroup.position.set(window.innerWidth > 768 ? 120 : 0, -20, 0);
+
+            scene.add(globeGroup);
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                globeGroup.position.set(window.innerWidth > 768 ? 120 : 0, -20, 0);
+            });
+
+            function animate() {
+                requestAnimationFrame(animate);
+                globeGroup.rotation.y += 0.0025;
+                ring.rotation.z -= 0.001;
+                renderer.render(scene, camera);
+            }
+
+            animate();
+        }
+
+
+        /* ==========================================================================
+           7. PWA MANIFEST & SERVICE WORKER
+           ========================================================================== */
+        const manifestObj = {
+            "name": "Firemní Telefonní Seznam",
+            "short_name": "Kontakty",
+            "start_url": "./index.html",
+            "display": "standalone",
+            "background_color": "#0b0f19",
+            "theme_color": "#0f172a",
+            "orientation": "portrait-primary",
+            "icons": [
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/3061/3061341.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "any maskable"
+                }
+            ]
+        };
+
+        const swCodeString = `const CACHE_NAME = 'firemni-seznam-v2';
+const ASSETS = [
+    './',
+    './index.html',
+    'https://cdn.tailwindcss.com',
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
+    'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
+];
+
+self.addEventListener('install', (e) => {
+    e.waitUntil(
+        caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    );
+    self.skipWaiting();
+});
+
+self.addEventListener('activate', (e) => {
+    e.waitUntil(
+        caches.keys().then((keys) => {
+            return Promise.all(
+                keys.map((key) => {
+                    if (key !== CACHE_NAME) return caches.delete(key);
+                })
+            );
+        })
+    );
+    self.clients.claim();
+});
+
+self.addEventListener('fetch', (e) => {
+    e.respondWith(
+        caches.match(e.request).then((cachedResponse) => {
+            if (cachedResponse) return cachedResponse;
+            return fetch(e.request).then((networkResponse) => {
+                if (e.request.url.startsWith('http')) {
+                    const responseClone = networkResponse.clone();
+                    caches.open(CACHE_NAME).then((cache) => {
+                        cache.put(e.request, responseClone);
+                    });
+                }
+                return networkResponse;
+            }).catch(() => {
+                if (e.request.mode === 'navigate') {
+                    return caches.match('./index.html');
+                }
+            });
+        })
+    );
+});`;
+
+        function setupPwaFiles() {
+            document.getElementById('manifest-code').textContent = JSON.stringify(manifestObj, null, 2);
+            document.getElementById('sw-code').textContent = swCodeString;
+
+            const manifestBlob = new Blob([JSON.stringify(manifestObj, null, 2)], { type: 'application/json' });
+            const manifestURL = URL.createObjectURL(manifestBlob);
+            document.getElementById('manifest-placeholder').setAttribute('href', manifestURL);
+        }
+
+        function downloadFile(filename, content, type) {
+            const blob = new Blob([content], { type: type });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadManifest() {
+            downloadFile('manifest.json', JSON.stringify(manifestObj, null, 2), 'application/json');
+            showToast('Soubor manifest.json stažen', 'success');
+        }
+
+        function downloadServiceWorker() {
+            downloadFile('sw.js', swCodeString, 'application/javascript');
+            showToast('Soubor sw.js stažen', 'success');
+        }
+
+        function openPwaModal() {
+            const modal = document.getElementById('pwa-modal');
+            modal.classList.remove('hidden');
+            setTimeout(() => modal.classList.remove('opacity-0'), 10);
+        }
+
+        function closePwaModal() {
+            const modal = document.getElementById('pwa-modal');
+            modal.classList.add('opacity-0');
+            setTimeout(() => modal.classList.add('hidden'), 200);
+        }
+
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            const msgEl = document.getElementById('toast-message');
+            const iconEl = document.getElementById('toast-icon');
+
+            msgEl.textContent = message;
+
+            if (type === 'error') {
+                iconEl.className = 'fa-solid fa-circle-exclamation text-rose-400';
+            } else if (type === 'success') {
+                iconEl.className = 'fa-solid fa-circle-check text-emerald-400';
+            } else {
+                iconEl.className = 'fa-solid fa-circle-info text-blue-400';
+            }
+
+            toast.classList.remove('translate-y-20', 'opacity-0');
+
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
